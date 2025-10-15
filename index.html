@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Telegram Mini Game — Full-ish</title>
+  <title>Telegram Mini Game — Fullscreen</title>
   <style>
     :root{
       --bg:#0e0f12; --fg:#ffffff; --muted:#9aa0a6; --accent:#5b86ff;
       --card:#151720; --ok:#10b981; --warn:#f59e0b;
-      --vh: 100dvh; /* Telegramから安定高さを渡して上書きする */
+      --vh: 100dvh; /* Telegram提供の安定高さ/innerHeightで上書き */
     }
     html,body{height:100%;margin:0}
     body{
@@ -16,31 +16,36 @@
       font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
       min-height:-webkit-fill-available;
     }
+
     /* 画面を余白なしで使い切る */
     .wrap{
       min-height:var(--vh);
       height:var(--vh);
       display:flex;align-items:stretch;justify-content:stretch;
-      padding:0; /* 余白を削る */
+      padding:0;
     }
     .card{
       background:var(--card);
-      border-radius:0; /* 端を密着させる */
+      border-radius:0;
       box-shadow:none; padding:12px;
       width:100vw; height:100%;
       display:flex; flex-direction:column; gap:8px;
     }
+
     h1,h2,p{margin:0}
+    .muted{color:var(--muted)}
+
     /* キャンバスを縦方向に伸ばして“ほぼ全画面”へ */
     canvas{
-      flex:1;        /* 残りをすべて使う */
-      width:100%;    /* 横いっぱい */
-      height:auto;   /* JSで実ピクセルに合わせる */
+      flex:1;            /* 残りの高さを全部使う */
+      width:100%;        /* 横いっぱい */
+      height:auto;       /* JSで実ピクセルに合わせる */
       background:#0b0d14; border-radius:12px; display:block;
+      touch-action:manipulation; /* タッチ遅延を避ける */
     }
+
     .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
     .btn{appearance:none;border:0;border-radius:12px;padding:12px 16px;font-weight:600;background:var(--accent);color:white;cursor:pointer}
-    .muted{color:var(--muted)}
   </style>
 </head>
 <body>
@@ -62,76 +67,96 @@
   </div>
 
   <script>
-    // --- Telegram WebApp bootstrap ---
     const tg = window.Telegram?.WebApp ?? null;
 
+    // ---------- 画面占有を最大化 ----------
     function applyViewportVH() {
-      // Telegram提供の安定高さ(ピクセル)があればそれを優先
+      // Telegramの安定高さ or innerHeight 優先でCSS変数を更新
       const stable = tg?.viewportStableHeight;
       const px = stable ? `${stable}px` : (window.innerHeight ? `${window.innerHeight}px` : '100dvh');
       document.documentElement.style.setProperty('--vh', px);
     }
 
-    if (tg){
-      tg.ready();
-
-      // フッター分を食うので、基本は隠す（必要時だけ表示する）
-      try { tg.MainButton.hide(); } catch(_) {}
-
-      // 何回かexpandを試すと安定することが多い
-      const tryExpand = () => { try { tg.expand(); } catch(_) {} };
-      tryExpand(); setTimeout(tryExpand, 100); setTimeout(tryExpand, 300);
-
-      // テーマ反映
-      const th = tg.themeParams || {};
+    function themeSync(){
+      const th = tg?.themeParams || {};
       const css = {
         '--bg': th.bg_color, '--fg': th.text_color, '--muted': th.hint_color,
         '--card': th.secondary_bg_color, '--accent': th.button_color
       };
       for (const k in css){ if(css[k]) document.documentElement.style.setProperty(k, css[k]); }
-
-      // こんにちは
-      const u = tg.initDataUnsafe?.user;
-      document.getElementById('hello').textContent = u ? `Hello, ${u.first_name}!` : 'Hello! (no user)';
-
-      // ビューポート高さをCSSへ
-      applyViewportVH();
-      tg.onEvent?.('viewportChanged', applyViewportVH);
-    } else {
-      // ブラウザ直開き時
-      applyViewportVH();
-      window.addEventListener('resize', applyViewportVH);
     }
 
-    // --- CanvasサイズをDOMにフィットさせる（高解像度対応） ---
+    async function requestFsOnce(){
+      if (!tg?.requestFullscreen) return;   // 非対応クライアントは静かに無視
+      try { await tg.requestFullscreen(); } catch(e) { /* ユーザー操作で再試行する */ }
+    }
+
+    function expandMulti(){
+      const tryExpand = () => { try{ tg?.expand(); }catch(e){} };
+      tryExpand(); setTimeout(tryExpand, 100); setTimeout(tryExpand, 300);
+    }
+
+    function lockGestures(){
+      try { tg?.disableVerticalSwipes?.(); } catch(e){}
+      try {
+        tg?.setHeaderColor?.('bg_color');
+        tg?.setBackgroundColor?.('bg_color');
+        tg?.setBottomBarColor?.('bg_color'); // 新しめのクライアント
+      } catch(e){}
+    }
+
+    // ---------- 起動時処理 ----------
+    tg?.ready();
+    expandMulti();
+    themeSync();
+    lockGestures();
+    applyViewportVH();
+
+    // フルスクリーン要求（起動直後）
+    requestFsOnce();
+    // ユーザーの最初のタップでも再試行（成功率UP）
+    window.addEventListener('pointerdown', requestFsOnce, { once: true });
+
+    // 画面変化時は高さを更新
+    tg?.onEvent?.('viewportChanged', applyViewportVH);
+    window.addEventListener('resize', applyViewportVH);
+
+    // フルスクリーン状態の監視＆自動リカバリ
+    tg?.onEvent?.('fullscreenFailed', () => { /* 非対応でも見た目は整っている */ });
+    tg?.onEvent?.('fullscreenChanged', (isFs) => { if (!isFs) setTimeout(requestFsOnce, 150); });
+
+    // ---------- ユーザー挨拶 ----------
+    const hello = document.getElementById('hello');
+    const u = tg?.initDataUnsafe?.user;
+    hello.textContent = u ? `Hello, ${u.first_name}!` : 'Hello! (no user)';
+
+    // ---------- CanvasをDOMサイズにフィット（高解像度ぼやけ防止） ----------
     const canvas = document.getElementById('game');
     const ctx = canvas.getContext('2d');
-
     function fitCanvasToBox() {
       const rect = canvas.getBoundingClientRect();
       const dpr = Math.max(1, window.devicePixelRatio || 1);
-      canvas.width = Math.floor(rect.width * dpr);
+      canvas.width  = Math.floor(rect.width * dpr);
       canvas.height = Math.floor(rect.height * dpr);
       ctx.setTransform(dpr,0,0,dpr,0,0); // 論理座標=CSSピクセル
     }
-    // 初回とリサイズ時に合わせる
     new ResizeObserver(fitCanvasToBox).observe(canvas);
     window.addEventListener('resize', fitCanvasToBox);
 
-    // --- Minimal game loop (target tapper) ---
+    // ---------- ゲーム本体 ----------
     let score = 0; let timeLeft = 30.0; let playing = true;
     const hudScore = document.getElementById('score');
-    const hudTime = document.getElementById('time');
+    const hudTime  = document.getElementById('time');
 
     const target = { x: 180, y: 270, r: 28, vx: 110, vy: 130 };
 
     function restart(){
       score = 0; timeLeft = 30.0; playing = true;
-      // キャンバス中央に配置（サイズ変更後に呼ばれてもOK）
+      // キャンバス中央に配置（サイズ変更後でもOK）
       target.x = canvas.clientWidth/2; target.y = canvas.clientHeight/2;
       target.vx = 110; target.vy = 130; target.r = 28;
       hudScore.textContent = score;
-      hudTime.textContent = timeLeft.toFixed(1);
+      hudTime.textContent  = timeLeft.toFixed(1);
       fitCanvasToBox();
     }
     document.getElementById('restart').onclick = restart;
